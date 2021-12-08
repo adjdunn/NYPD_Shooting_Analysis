@@ -1,0 +1,283 @@
+---
+title: "Analysis of NYPD Shooting Data from 2006 to 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import Libraries
+
+```{r}
+library(dplyr)
+library(ggplot2) 
+library(lubridate)
+```
+
+## Load Data
+
+The following dataset (NYPD Shooting Incident Data (Historic)) was acquired from the data.gov website. It contains shooting data in New York City from 2006 to 2015. 
+
+```{r get_data}
+data_url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+data <- read.csv(data_url)
+```
+
+
+## Data Summary
+
+First look at the data. 
+
+There are 23568 rows in the dataset with each row representing a single shooting. 
+
+Variables include dates, time, location of shootings as well as age and race data for victims and perpetrators. 
+
+Most of the variables are formatted as characters (chr). The first step will be to convert variables to factors, dates and times and then take another look at the data.  
+
+```{r}
+summary(data)
+```
+
+
+## Data Cleaning and Transforming
+
+
+Covert OCCUR_DATE variable to Date format.
+
+```{r}
+data$OCCUR_DATE <- mdy(data$OCCUR_DATE)
+```
+
+
+Convert OCCUR_TIME variable to Time format.
+
+```{r}
+data$OCCUR_TIME <- strptime(data$OCCUR_TIME, format="%H:%M:%S")
+```
+
+
+Convert PERP_AGE_GROUP and VIC_AGE_GROUP to ordered factors.
+
+
+```{r}
+perp_age_values = unique(data$PREP_AGE_GROUP)
+perp_age_values
+
+data$PERP_AGE_GROUP = factor(data$PERP_AGE_GROUP, ordered=TRUE, 
+                             levels=c("<18", "18-24", "25-44", "45-64", "65+", "UNKNOWN"))
+```
+
+```{r}
+vic_age_values = unique(data$VIC_AGE_GROUP)
+vic_age_values
+
+data$VIC_AGE_GROUP = factor(data$VIC_AGE_GROUP, ordered=TRUE, 
+                            levels=c("<18", "18-24", "25-44", "45-64", "65+", "UNKNOWN"))
+
+```
+
+
+Covert STATISTICAL_MURDER_FLAG to logical/Boolean
+
+```{r}
+data$STATISTICAL_MURDER_FLAG <- as.logical(data$STATISTICAL_MURDER_FLAG)
+
+```
+
+
+Convert additional variables to factors.
+
+```{r}
+data$BORO = factor(data$BORO)
+data$PRECINCT = factor(data$PRECINCT)
+data$JURISDICTION_CODE = factor(data$JURISDICTION_CODE)
+data$LOCATION_DESC = factor(data$LOCATION_DESC)
+data$PERP_SEX = factor(data$PERP_SEX)
+data$PERP_RACE = factor(data$PERP_RACE)
+data$VIC_SEX = factor(data$VIC_SEX)
+data$VIC_RACE = factor(data$VIC_RACE)
+
+```
+
+
+Take another look at the data. 
+
+
+```{r}
+summary(data)
+```
+The data covers shootings over a 15 year period between the dates of Jan 1st, 2006 and Dec 31st, 2020. 
+
+There are a large number of missing values in the LOCATION_DESC variable. 
+
+```{r}
+data %>% count(data$LOCATION_DESC == "")
+```
+The number of rows with missing values in the LOCATION_DESC column is 13581; over half of the data set. There are too many missing values to remove the rows. It would make sense to classify these shooting locations as either Unknown or (Other). Considering the large number of empty values, it is unlikely that this is a data entry error. For that reason, I will leave the empty values unchanged and consider it an unknown location. 
+
+
+## Data Analysis and Visualizations
+
+The analysis will focus on the locations, time and seasonality of the shootings.  
+
+### Shootings by Year
+
+```{r}
+
+data$YEAR = year(data$OCCUR_DATE)
+
+qplot(data=data, x=YEAR, geom='bar')
+```
+NYC has seen a significant increase in shootings in 2020, approximately double the average number of shootings in the previous 3 years and the highest level since 2011. 
+
+### Shootings by Boro
+
+The following provides the shootings by boro in 2020. 
+
+Brooklyn has the most shootings and the Bronx has the second most shootings. Staten Island has significantly less than any of the other boroughs. 
+
+This is due to population so I will normalize the data and display the number of shootings per 100,000 population per borough. 
+
+
+
+```{r}
+data2020 = subset(data, YEAR == 2020)
+data2020 %>% count(data2020$BORO)
+```
+
+
+```{r}
+qplot(data=data2020, x=BORO)
+```
+
+Shootings by Boro per 100,000 people. Population data from wikipedia.org.
+
+```{r}
+
+boro = c('BRONX', 'BROOKLYN', 'MANHATTAN', 'QUEENS', 'STATEN ISLAND')
+population = c(1472654, 2736074, 1694251, 2405464, 495747)
+
+nyc.population = data.frame(boro, population)
+
+shooting.rate = (data2020 %>% count(BORO))$n / (nyc.population$population / 100000 )
+
+shooting.rate.dataframe = data.frame(boro, shooting.rate)
+
+shooting.rate.dataframe
+
+```
+
+```{r}
+
+p <- ggplot(data=shooting.rate.dataframe, aes(x=boro, y=shooting.rate)) + geom_bar(stat="identity")
+p
+```
+
+Adjusting for population, the Bronx has the highest number of shootings per 100,000 population in 2020 (34), following by Brooklyn (30). 
+
+
+### Shootings by Location Type
+
+There are 40 different categories in the LOCATION_DESC variable. The most common are MULTI DWELL - PUBLIC HOUS (public housing apartments), MULTI DWELL - APT BUILD (apartment buildings) and PVT HOUSE (private homes).
+
+
+```{r}
+locations <- data %>% count(LOCATION_DESC, sort=TRUE) 
+locations
+```
+
+
+
+```{r}
+locations_ordered <- locations %>% arrange(desc(n)) %>% top_n(10)
+
+ggplot(data=locations_ordered, aes(x=reorder(LOCATION_DESC, n), y=n)) + geom_bar(stat="identity") + coord_flip() + ggtitle("Shootings by Location - Top 10")
+
+```
+
+### Shootings by Time of Day
+
+```{r}
+
+data$TIME_HOUR <- as.factor(hour(data$OCCUR_TIME))
+shooting.by.hour <- data %>% count(TIME_HOUR)
+ave_shooting_hour = nrow(data) / 24
+
+p <- ggplot(data=shooting.by.hour, aes(x=TIME_HOUR, y=n))
+p <- p + geom_bar(stat="identity")
+p <- p + geom_line(aes(x=TIME_HOUR, y=ave_shooting_hour), group=1)
+p <- p + ggtitle("Total Shootings by Hour of Day from 2006 to 2020")
+p
+```
+Shootings are highest at between 7pm (19:00) and 5am and reach a peak around midnight. The average total shootings by hour over the 15 year period is approximately 1,000. 
+
+
+### Shootings by Month of Year
+
+
+```{r}
+
+data$MONTH <- as.factor(month(data$OCCUR_DATE))
+shooting.by.month <- data %>% count(MONTH)
+ave_shooting_month = nrow(data) / 12
+
+p <- ggplot(data=shooting.by.month, aes(x=MONTH, y=n))
+p <- p + geom_bar(stat="identity")
+p <- p + geom_line(aes(x=MONTH, y=ave_shooting_month), group=1)
+p <- p + ggtitle("Total Shootings by Month of Year from 2006 to 2020")
+p
+
+```
+The months with the highest number of shootings are May, June, July, August and September.The average total shootings by month from 2006 to 2020 was approximately 2,000. 
+
+
+## Model
+
+Two linear regression models:
+
+m1 models the Latitude of a shooting based on the hour of the day.
+m2 models the Longitude of a shooting based on the hour of the day.
+
+These models are an attempt to use the time of day data to predict the geographic location of a shooting. 
+
+```{r}
+
+m1 = lm(Latitude ~ TIME_HOUR, data = data)
+m2 = lm(Longitude ~ TIME_HOUR, data = data)
+```
+
+Summary of Latitude (m1) model. 
+
+```{r}
+summary(m1)
+```
+
+Summary of Longitude (m2) model.
+
+```{r}
+summary(m2)
+```
+
+## Conclusion
+The analysis of the data indicates there is likely a relationship between the the number of shootings in NYC and the time of day (higher shootings between the hours of 7pm and 5am) and the time of year (higher shootings during the warmer months of May through September). The data also show a large increase in shootings in 2020 relative to the previous 7 years (and double the average of the preceding 3 years). 
+
+Two linear models were created to predict Latitude and Longitude of a shooting based on the time of day. The model for Longitude showed little statistical significance. The model for Latitude showed statistical significance for certain hours of the day and particularly for the hours between 10am and 5pm (a period where there are a lower than average number of shootings). This was a very crude model and the predictive power is likely to be low given the R squared value of 0.003433 (for the Latitude model). The relationships between location, time of day and seasonality of shootings could be studied further, along with additional variables, in order to create a more power model. 
+
+With respect to bias in the dataset, the time duration of the data should be considered when developing any conclusions on the increase in shootings in 2020. We don't have data before 2006 and the significantly lower number of shootings between 2017 and 2019 may themselves be unusual. The circumstances surrounding the pandemic and lock downs during 2020 may also have contributed to the rise in shootings. 
+
+With respect to personal bias, I believe that any data scientist or research has an inherent bias of wanting to see interesting patterns in data. Datasets can take considerable time and effort to build and clean and there will always be an innate desire from the researcher to uncover interesting and useful conclusions as a payoff for that hard work. Seeking outside, unbiased reviews of an analysis is one way to combat this form of bias.   
+
+
+
+## Session Info
+
+```{r session_inf}
+sessionInfo()
+```
+
+
+
+
